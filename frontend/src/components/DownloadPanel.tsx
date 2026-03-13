@@ -1,8 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { WorkshopItem, streamDownload, SseEvent } from "@/lib/api";
-import { Download, X, Loader2, CheckCircle, AlertCircle, FolderOpen, Terminal, XCircle } from "lucide-react";
+import { WorkshopItem, streamDownload, submitSteamInput, SseEvent } from "@/lib/api";
+import {
+  Download, X, Loader2, CheckCircle, AlertCircle,
+  FolderOpen, Terminal, XCircle, ShieldCheck, KeyRound,
+} from "lucide-react";
 
 interface Props {
   selected: WorkshopItem[];
@@ -10,16 +13,19 @@ interface Props {
 }
 
 type Status = "idle" | "running" | "done" | "error";
+type PromptType = "password" | "steam_guard" | null;
 
 export default function DownloadPanel({ selected, onClear }: Props) {
   const [outputDir, setOutputDir] = useState("./downloads");
-  const [username, setUsername] = useState("anonymous");
+  const [username, setUsername] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
-  const [resultPath, setResultPath] = useState("");
   const [showLog, setShowLog] = useState(false);
+  const [prompt, setPrompt] = useState<PromptType>(null);
+  const [promptValue, setPromptValue] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const promptInputRef = useRef<HTMLInputElement>(null);
 
   if (selected.length === 0 && status === "idle") return null;
 
@@ -28,29 +34,41 @@ export default function DownloadPanel({ selected, onClear }: Props) {
     setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
   };
 
+  const showPrompt = (type: PromptType) => {
+    setPrompt(type);
+    setPromptValue("");
+    setTimeout(() => promptInputRef.current?.focus(), 100);
+  };
+
   const handleDownload = async () => {
     if (selected.length === 0) return;
     const appId = selected[0].app_id;
     const ids = selected.map((i) => i.workshop_id);
+    const user = username.trim() || "anonymous";
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     setStatus("running");
     setLogs([]);
-    setResultPath("");
     setShowLog(true);
+    setPrompt(null);
 
     try {
-      await streamDownload(appId, ids, outputDir, username, (event: SseEvent) => {
+      await streamDownload(appId, ids, outputDir, user, (event: SseEvent) => {
         if (event.type === "log") {
           appendLog(event.line);
+        } else if (event.type === "need_password") {
+          showPrompt("password");
+        } else if (event.type === "steam_guard") {
+          showPrompt("steam_guard");
         } else if (event.type === "done") {
-          setResultPath(event.path);
           setStatus("done");
+          setPrompt(null);
           appendLog(`✓ Downloaded to: ${event.path}`);
         } else {
-          appendLog(`✗ Error: ${event.line}`);
+          appendLog(`✗ ${event.line}`);
           setStatus("error");
+          setPrompt(null);
         }
       }, ctrl.signal);
     } catch (e) {
@@ -61,163 +79,224 @@ export default function DownloadPanel({ selected, onClear }: Props) {
     }
   };
 
+  const handlePromptSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!promptValue.trim()) return;
+    const value = promptValue.trim();
+    setPrompt(null);
+    appendLog(prompt === "password" ? "[password submitted]" : "[Steam Guard code submitted]");
+    await submitSteamInput(value);
+    setPromptValue("");
+  };
+
   const handleCancel = () => {
     abortRef.current?.abort();
     setStatus("idle");
+    setPrompt(null);
   };
 
   const handleClose = () => {
     setStatus("idle");
     setLogs([]);
     setShowLog(false);
+    setPrompt(null);
     onClear();
   };
 
+  const promptConfig = {
+    password: {
+      icon: <KeyRound className="w-5 h-5 text-yellow-400" />,
+      title: "Password required",
+      subtitle: "No cached credentials found for this account",
+      placeholder: "Steam password",
+      inputType: "password",
+      monospace: false,
+    },
+    steam_guard: {
+      icon: <ShieldCheck className="w-5 h-5 text-blue-400" />,
+      title: "Steam Guard",
+      subtitle: "Enter the code from your authenticator app or email",
+      placeholder: "XXXXX",
+      inputType: "text",
+      monospace: true,
+    },
+  };
+
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-gray-700 bg-gray-900/95 backdrop-blur-sm">
-      {/* Log terminal */}
-      {showLog && logs.length > 0 && (
-        <div className="max-w-6xl mx-auto px-4 pt-3">
-          <div className="bg-gray-950 border border-gray-700 rounded-lg overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700 bg-gray-900">
-              <div className="flex items-center gap-2 text-xs text-gray-400">
-                <Terminal className="w-3.5 h-3.5" />
-                <span>SteamCMD output</span>
+    <>
+      {/* Password / Steam Guard modal */}
+      {prompt && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center">
+                {promptConfig[prompt].icon}
               </div>
-              <button
-                onClick={() => setShowLog(false)}
-                className="text-gray-500 hover:text-gray-300 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <div>
+                <p className="font-semibold text-white">{promptConfig[prompt].title}</p>
+                <p className="text-xs text-gray-400">{promptConfig[prompt].subtitle}</p>
+              </div>
             </div>
-            <div className="h-40 overflow-y-auto p-3 font-mono text-xs text-gray-300 space-y-0.5">
-              {logs.map((line, i) => (
-                <div
-                  key={i}
-                  className={
-                    line.startsWith("✓")
-                      ? "text-green-400"
-                      : line.startsWith("✗")
-                      ? "text-red-400"
-                      : "text-gray-300"
-                  }
+            <form onSubmit={handlePromptSubmit} className="space-y-3">
+              <input
+                ref={promptInputRef}
+                type={promptConfig[prompt].inputType}
+                value={promptValue}
+                onChange={(e) => setPromptValue(
+                  prompt === "steam_guard" ? e.target.value.toUpperCase() : e.target.value
+                )}
+                placeholder={promptConfig[prompt].placeholder}
+                autoComplete={prompt === "password" ? "current-password" : "one-time-code"}
+                className={`w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-2.5 text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 ${
+                  promptConfig[prompt].monospace ? "text-center text-xl font-mono tracking-widest" : "text-sm"
+                }`}
+              />
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  className="flex-1 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors"
                 >
-                  {line}
-                </div>
-              ))}
-              <div ref={logEndRef} />
-            </div>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!promptValue.trim()}
+                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  Submit
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
-      {/* Controls bar */}
-      <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <div className="flex-1 min-w-0">
-          {status === "idle" || status === "running" ? (
-            <>
-              <p className="text-sm font-medium text-white">
-                {selected.length} item{selected.length !== 1 ? "s" : ""} selected
-              </p>
-              <p className="text-xs text-gray-400 truncate">
-                {selected.map((i) => i.title).join(", ")}
-              </p>
-            </>
-          ) : status === "done" ? (
-            <p className="text-sm text-green-400 flex items-center gap-1.5">
-              <CheckCircle className="w-4 h-4 shrink-0" />
-              Download complete
-            </p>
-          ) : (
-            <p className="text-sm text-red-400 flex items-center gap-1.5">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              Download failed — see log above
-            </p>
-          )}
-        </div>
-
-        {/* Output dir + username — only shown when idle */}
-        {status === "idle" && (
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-            <div className="flex items-center gap-2 w-full sm:w-52">
-              <FolderOpen className="w-4 h-4 text-gray-400 shrink-0" />
-              <input
-                value={outputDir}
-                onChange={(e) => setOutputDir(e.target.value)}
-                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                placeholder="./downloads"
-              />
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-gray-700 bg-gray-900/95 backdrop-blur-sm">
+        {/* Log terminal */}
+        {showLog && logs.length > 0 && (
+          <div className="max-w-6xl mx-auto px-4 pt-3">
+            <div className="bg-gray-950 border border-gray-700 rounded-lg overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700 bg-gray-900">
+                <div className="flex items-center gap-2 text-xs text-gray-400">
+                  <Terminal className="w-3.5 h-3.5" />
+                  <span>SteamCMD output</span>
+                </div>
+                <button onClick={() => setShowLog(false)} className="text-gray-500 hover:text-gray-300 transition-colors">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="h-40 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
+                {logs.map((line, i) => (
+                  <div key={i} className={
+                    line.startsWith("✓") ? "text-green-400" :
+                    line.startsWith("✗") ? "text-red-400" :
+                    line.startsWith("[") ? "text-blue-400" :
+                    "text-gray-300"
+                  }>
+                    {line}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
             </div>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="w-full sm:w-36 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-              placeholder="Steam username"
-              title="Use 'anonymous' for F2P games, or enter your Steam username for paid games"
-            />
           </div>
         )}
 
-        <div className="flex items-center gap-2">
-          {/* Show log toggle if hidden */}
-          {!showLog && logs.length > 0 && (
-            <button
-              onClick={() => setShowLog(true)}
-              className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-              title="Show log"
-            >
-              <Terminal className="w-4 h-4" />
-            </button>
-          )}
+        {/* Controls bar */}
+        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          {/* Status text */}
+          <div className="flex-1 min-w-0">
+            {status === "idle" || status === "running" ? (
+              <>
+                <p className="text-sm font-medium text-white">
+                  {selected.length} item{selected.length !== 1 ? "s" : ""} selected
+                </p>
+                <p className="text-xs text-gray-400 truncate">
+                  {selected.map((i) => i.title).join(", ")}
+                </p>
+              </>
+            ) : status === "done" ? (
+              <p className="text-sm text-green-400 flex items-center gap-1.5">
+                <CheckCircle className="w-4 h-4 shrink-0" /> Download complete
+              </p>
+            ) : (
+              <p className="text-sm text-red-400 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0" /> Download failed — see log above
+              </p>
+            )}
+          </div>
 
+          {/* Output dir + username — only when idle */}
           {status === "idle" && (
-            <>
-              <button
-                onClick={onClear}
-                className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors"
-                title="Clear selection"
-              >
-                <X className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleDownload}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium text-sm transition-colors"
-              >
-                <Download className="w-4 h-4" />
-                Download
-              </button>
-            </>
-          )}
-
-          {status === "running" && (
-            <button
-              onClick={handleCancel}
-              className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded-lg font-medium text-sm transition-colors"
-            >
-              <XCircle className="w-4 h-4" />
-              Cancel
-            </button>
-          )}
-
-          {(status === "done" || status === "error") && (
-            <button
-              onClick={handleClose}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium text-sm transition-colors"
-            >
-              <X className="w-4 h-4" />
-              Close
-            </button>
-          )}
-
-          {status === "running" && (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Downloading...
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5">
+                <FolderOpen className="w-4 h-4 text-gray-400 shrink-0" />
+                <input
+                  value={outputDir}
+                  onChange={(e) => setOutputDir(e.target.value)}
+                  className="w-40 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  placeholder="./downloads"
+                />
+              </div>
+              <input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-36 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                placeholder="Username (optional)"
+                autoComplete="username"
+              />
             </div>
           )}
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2">
+            {!showLog && logs.length > 0 && (
+              <button onClick={() => setShowLog(true)} className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors" title="Show log">
+                <Terminal className="w-4 h-4" />
+              </button>
+            )}
+
+            {status === "idle" && (
+              <>
+                <button onClick={onClear} className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition-colors" title="Clear selection">
+                  <X className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleDownload}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium text-sm transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </button>
+              </>
+            )}
+
+            {status === "running" && (
+              <>
+                <div className="flex items-center gap-2 text-sm text-gray-400">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {prompt === "steam_guard" ? "Waiting for Steam Guard..." :
+                   prompt === "password" ? "Waiting for password..." :
+                   "Downloading..."}
+                </div>
+                <button
+                  onClick={handleCancel}
+                  className="flex items-center gap-2 px-3 py-2 bg-red-700 hover:bg-red-600 text-white rounded-lg text-sm transition-colors"
+                >
+                  <XCircle className="w-4 h-4" /> Cancel
+                </button>
+              </>
+            )}
+
+            {(status === "done" || status === "error") && (
+              <button onClick={handleClose} className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium text-sm transition-colors">
+                <X className="w-4 h-4" /> Close
+              </button>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

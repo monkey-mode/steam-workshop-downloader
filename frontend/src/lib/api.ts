@@ -28,7 +28,9 @@ export interface StatusResponse {
 export type SseEvent =
   | { type: "log"; line: string }
   | { type: "done"; path: string }
-  | { type: "error"; line: string };
+  | { type: "error"; line: string }
+  | { type: "steam_guard" }
+  | { type: "need_password" };
 
 export async function browseWorkshop(params: {
   app_id: string;
@@ -55,10 +57,14 @@ export async function getItem(workshopId: string): Promise<WorkshopItem> {
   return res.json();
 }
 
-/**
- * Stream download events from the backend SSE endpoint.
- * Calls onEvent for each line of output, until done or error.
- */
+export async function submitSteamInput(input: string): Promise<void> {
+  await fetch(`${API_BASE}/api/download/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: input }),
+  });
+}
+
 export async function streamDownload(
   app_id: string,
   workshop_ids: string[],
