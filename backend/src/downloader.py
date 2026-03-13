@@ -39,6 +39,7 @@ STEAM_GUARD_MARKERS = [
 ]
 
 PASSWORD_MARKERS = [
+    "Cached credentials not found",
     "password:",
     "Password:",
     "Enter password",
@@ -98,7 +99,6 @@ def build_steamcmd_args(
 
     args = [
         cmd,
-        "+@ShutdownOnFailedCommand", "1",
         "+force_install_dir", str(output_path),
         "+login", username,
     ]
@@ -148,6 +148,7 @@ async def stream_download(
         assert proc.stdin is not None
         downloaded_count = 0
         error_lines: list[str] = []
+        password_prompted = False
 
         async for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", errors="replace").rstrip()
@@ -161,8 +162,9 @@ async def stream_download(
             if "ERROR!" in line and "failed" in line.lower():
                 error_lines.append(line.strip())
 
-            # Password prompt — cached credentials not found
-            if any(marker in line for marker in PASSWORD_MARKERS):
+            # Password prompt — only trigger once per session
+            if not password_prompted and any(marker in line for marker in PASSWORD_MARKERS):
+                password_prompted = True
                 yield "NEED_PASSWORD:"
                 try:
                     pwd = await asyncio.wait_for(_input_queue.get(), timeout=120)
