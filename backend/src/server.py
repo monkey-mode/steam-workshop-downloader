@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .api import browse_workshop, get_item_details, parse_workshop_id, get_api_key
-from .downloader import find_steamcmd, stream_download, get_install_instructions
+from .downloader import find_steamcmd, stream_download, send_steamcmd_input, get_install_instructions
 
 app = FastAPI(title="Steam Workshop Downloader API")
 
@@ -45,6 +45,10 @@ class DownloadRequest(BaseModel):
     workshop_ids: list[str]
     output_dir: str = "./downloads"
     username: str = "anonymous"
+
+
+class SteamGuardInput(BaseModel):
+    code: str
 
 
 def to_out(item) -> WorkshopItemOut:
@@ -110,14 +114,12 @@ async def get_item(workshop_id: str):
 @app.post("/api/download/stream")
 async def download_stream(req: DownloadRequest):
     """
-    SSE endpoint that streams SteamCMD output line by line.
-    Each event: data: <json>\n\n
-    Possible types: "log", "done", "error"
+    SSE endpoint streaming SteamCMD output.
+    Event types: "log", "done", "error", "steam_guard"
     """
     if not find_steamcmd():
         async def no_steamcmd():
-            msg = get_install_instructions()
-            yield f"data: {json.dumps({'type': 'error', 'line': msg})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'line': get_install_instructions()})}\n\n"
         return StreamingResponse(no_steamcmd(), media_type="text/event-stream")
 
     async def event_generator():
@@ -128,22 +130,28 @@ async def download_stream(req: DownloadRequest):
             username=req.username,
         ):
             if line.startswith("SUCCESS:"):
-                path = line[len("SUCCESS:"):]
-                yield f"data: {json.dumps({'type': 'done', 'path': path})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'path': line[8:]})}\n\n"
             elif line.startswith("ERROR:"):
-                msg = line[len("ERROR:"):]
-                yield f"data: {json.dumps({'type': 'error', 'line': msg})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'line': line[6:]})}\n\n"
+            elif line == "STEAMGUARD:":
+                yield f"data: {json.dumps({'type': 'steam_guard'})}\n\n"
+            elif line == "NEED_PASSWORD:":
+                yield f"data: {json.dumps({'type': 'need_password'})}\n\n"
             else:
                 yield f"data: {json.dumps({'type': 'log', 'line': line})}\n\n"
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/download/input")
+async def download_input(body: SteamGuardInput):
+    """Submit Steam Guard / 2FA code to the active SteamCMD process."""
+    await send_steamcmd_input(body.code.strip())
+    return {"ok": True}
 
 
 @app.get("/api/status")

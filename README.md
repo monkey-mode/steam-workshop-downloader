@@ -8,6 +8,20 @@ steam-workshop-downloader/
 └── frontend/   Web UI (Next.js)
 ```
 
+---
+
+## Screenshots
+
+**Select mods to download**
+
+![Select mods](assets/select-mods.png)
+
+**Live download with SteamCMD output**
+
+![Download in progress](assets/download-complete.png)
+
+---
+
 ## Requirements
 
 - Python 3.10+
@@ -30,28 +44,42 @@ sudo apt install steamcmd
 
 ---
 
-## Backend
+## Quick Start
 
-### Setup
+```bash
+make install   # install backend + frontend dependencies
+make dev       # run both servers in parallel
+```
+
+Then open [http://localhost:3000](http://localhost:3000).
+
+---
+
+## Setup (manual)
+
+### Backend
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+python serve.py
+# API server starts at http://localhost:8000
 ```
 
-### Run the API server
+### Frontend
 
 ```bash
-cd backend
-python serve.py
-# Server starts at http://localhost:8000
+cd frontend
+npm install
+npm run dev
+# Opens at http://localhost:3000
 ```
 
 ### Optional: Steam API key
 
-Set `STEAM_API_KEY` to enable the full `IPublishedFileService` browse API (richer metadata, no scraping):
+Set `STEAM_API_KEY` for richer browse metadata (no scraping):
 
 ```bash
 export STEAM_API_KEY=your_key_here
@@ -62,35 +90,25 @@ Get a free key at https://steamcommunity.com/dev/apikey
 
 ---
 
-## Frontend
-
-### Setup & run
-
-```bash
-cd frontend
-npm install
-npm run dev
-# Opens at http://localhost:3000
-```
-
-### Build for production
-
-```bash
-npm run build
-npm start
-```
-
----
-
 ## Web UI Usage
 
-1. Start the backend (`python serve.py`) and frontend (`npm run dev`)
-2. Enter an **App ID** or paste a Steam Workshop URL in the header (default: `255710` = Cities: Skylines)
-3. Browse mods — click cards to select them
-4. Set **output folder** and **Steam username** in the download bar at the bottom
-5. Click **Download** — live SteamCMD output streams in the terminal panel
+1. Enter an **App ID** or paste a Steam Workshop URL in the header
+   - Default is `255710` (Cities: Skylines)
+   - Also accepts full URLs like `https://steamcommunity.com/app/255710/workshop/`
+2. Browse and sort mods — click cards to select them
+3. Paste a `filedetails` URL or workshop ID directly into the search bar to look up a specific mod
+4. Enter your **Steam username** in the download bar (leave blank for anonymous / F2P games)
+5. Click **Download**
 
-> **Note:** Most paid-game mods require your Steam username. Enter it in the username field (SteamCMD will prompt for your password in the terminal where `python serve.py` is running). Free-to-play game mods work with `anonymous`.
+**Login flow:**
+- If you have a cached SteamCMD session, login is automatic — no password needed
+- If no cache exists, a **password prompt** appears automatically
+- If your account uses **Steam Guard / 2FA**, a code prompt appears after login
+
+Downloaded files are saved to:
+```
+<output_dir>/steamapps/workshop/content/<app_id>/<workshop_id>/
+```
 
 ---
 
@@ -135,16 +153,24 @@ swdl download 123456789 -a 255710 -u your_steam_username
 swdl download 123456789 -a 255710 -o ~/mods
 ```
 
-Downloaded files are placed at:
-```
-<output_dir>/steamapps/workshop/content/<app_id>/<workshop_id>/
-```
-
 ### Check SteamCMD
 
 ```bash
 swdl check
 ```
+
+---
+
+## Make Commands
+
+| Command | Description |
+|---------|-------------|
+| `make install` | Install backend + frontend dependencies |
+| `make dev` | Run both servers in parallel |
+| `make backend` | Run backend only |
+| `make frontend` | Run frontend only |
+| `make build` | Production build of frontend |
+| `make clean` | Remove all generated files |
 
 ---
 
@@ -154,7 +180,8 @@ swdl check
 |--------|------|-------------|
 | `GET` | `/api/browse` | Browse workshop items |
 | `GET` | `/api/item/{id}` | Get single item details |
-| `POST` | `/api/download/stream` | Stream download via SSE |
+| `POST` | `/api/download/stream` | Stream download output via SSE |
+| `POST` | `/api/download/input` | Send password or Steam Guard code |
 | `GET` | `/api/status` | Check SteamCMD + API key status |
 
 ### Browse params
