@@ -25,7 +25,7 @@ class WorkshopItem:
     preview_url: str
 
     def size_human(self) -> str:
-        size = self.file_size
+        size = int(self.file_size)
         if size == 0:
             return "Unknown"
         for unit in ["B", "KB", "MB", "GB"]:
